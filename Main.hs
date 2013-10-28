@@ -1,78 +1,47 @@
 {-# LANGUAGE GADTs, FlexibleContexts #-}
 module Main where
 
-import Data.List (minimumBy)
-import Data.Function (on)
-import Data.Maybe (catMaybes)
+import Graphics.Gloss
 
-data T = T Float | Never deriving (Show,Ord,Eq)
+type T = Float
 
-data Clip a = Clip T (Float -> a)
+data Clip a where
+    Clip :: T -> (T -> a) -> Clip a
+    (:>>:) :: Clip a -> Clip a -> Clip a
+    (:==:) :: Clip a -> Clip b -> Clip (a,b)
 
-data ClipM a where
-    Return :: a -> ClipM a
-    Bind :: (Pict x) => Clip x -> (x -> ClipM a) -> ClipM a
+dur :: Clip a -> T
+dur (Clip l _) = l
+dur (c :>>: d)  = dur c + dur d
+dur (c :==: d)  = dur c `min` dur d
 
-class Pict a where
-    toPict :: a -> String
+now :: Clip a -> a
+now (Clip _ f) = f 0
+now (c :>>: _) = now c
+now (c :==: d) = (now c , now d)
 
-instance Pict Ball where
-    toPict = show
+end :: Clip a -> a
+end (Clip l f) = f l
+end (_ :>>: d) = end d
+end (c :==: d)
+    | dur c <  dur d = (end c , at (dur c) d)
+    | dur c == dur d = (end c , end d)
+    | dur c >  dur d = (at (dur d) c , end d)
 
-instance (Pict a) => Pict [a] where
-    toPict = show . map toPict
+at :: T -> Clip a -> a
+at t (Clip l f) = f (min (max 0 t) l)
+at t (c :>>: d)
+    | dur c > t = at t c
+    | otherwise = at (t - dur c) d
+at t (c :==: d) = (at t c , at t d)
 
-instance Monad ClipM where
-    return = Return
-    (Return x) >>= k = k x
-    (Bind c f) >>= k = Bind c (\x -> f x >>= k)
+run :: Clip Picture -> IO ()
+run c = animate (InWindow "Animation" (300,300) (600,600)) white (flip at c)
 
-data Ball = Ball Position Velocity deriving Show
-type Position = Float
-type Velocity = Float
-
-type Wall = Float
-
-bounce :: [Ball] -> ClipM [Ball]
-bounce balls = do
-    let ballclips = do
-            (ball,rest) <- divide balls
-            let collision = undefined
-            case collision of
-                Nothing -> return (neverending (roll ball))
-                (Just (t,ball')) -> return (clip t (roll ball) >> return ball')
-    foo ballclips >>= bounce
-
-divide :: [a] -> [(a,[a])]
-divide = undefined
-
-neverending :: (Pict a) => (Float -> a) -> ClipM a
-neverending = clip Never
-
-clip :: (Pict a) => T -> (Float -> a) -> ClipM a
-clip t f = Bind (Clip t f) Return
-
-scenetime :: ClipM a -> T
-scenetime = undefined
-
-advance :: T -> ClipM a -> ClipM a
-advance = undefined
-
-foo :: [ClipM a] -> ClipM [a]
-foo = undefined
-
-bar :: ClipM a -> ClipM b -> ClipM (a,b)
-bar ca cb = undefined
-
-roll :: Ball -> (Float -> Ball)
-roll (Ball x v) t = Ball (x+t*v) v
-
-runClipM :: (Pict a) => ClipM a -> Float -> String
-runClipM (Return a) _ = toPict a
-runClipM (Bind (Clip Never f) _) t = toPict (f t)
-runClipM (Bind (Clip (T e) f) k) t
-    | t > e     = runClipM (k (f e)) t
-    | otherwise = toPict (f t)
+test :: Clip Picture
+test = Clip 2 (\t -> circle (10*t))
 
 main :: IO ()
-main = print "hallo"
+main = run test
+
+

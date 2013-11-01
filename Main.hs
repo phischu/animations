@@ -3,6 +3,8 @@ module Main where
 
 import Graphics.Gloss
 
+import Control.Monad (guard)
+
 type T = Float
 
 data Stream a = Stream (T -> a) (Event (Stream a))
@@ -38,14 +40,15 @@ run s = simulate
     now
     (const advance)
 
-data Ball = Ball Position Velocity
+data Ball = Ball Radius Position Velocity
+type Radius = Float
 type Position = Float
 type Velocity = Float
 
 deriving instance Show Ball
 
 render :: Ball -> Picture
-render (Ball x _) = translate x 0 (circle 10)
+render (Ball r x _) = translate x 0 (circle r)
 
 earlier :: Event a -> Event a -> Event a
 earlier Never e = e
@@ -60,23 +63,27 @@ earliest = foldr earlier Never
 data Wall = Wall Float
 
 collideBallWall :: Ball -> Wall -> Event Ball
-collideBallWall (Ball x v) (Wall w)
+collideBallWall (Ball r x v) (Wall w)
     | v == 0 = Never
-    | (w - x) / v <= 0 = Never
-    | otherwise = Eventually ((w - x) / v) (Ball w (negate v))
+    | otherwise = earliest (do
+        t <- [(w + r - x) / v,(w - r - x) / v]
+        guard (t >= 0)
+        return (Eventually t (Ball r (x + t * v) (negate v))))
 
 roll :: Ball -> T -> Ball
-roll (Ball x v) t = Ball (x + v * t) v
+roll (Ball r x v) t = Ball r (x + v * t) v
 
 sim1 :: [Wall] -> Ball -> Stream Ball
 sim1 walls ball = Stream (roll ball) (fmap (sim1 walls) (earliest (map (collideBallWall ball) walls)))
 
 collideBallBall :: Ball -> Ball -> Event (Ball,Ball)
-collideBallBall (Ball x1 v1) (Ball x2 v2)
+collideBallBall (Ball r1 x1 v1) (Ball r2 x2 v2)
     | v2 - v1 == 0 = Never
-    | (x2 - x1) / (v1 - v2) <= 0 = Never
-    | otherwise = Eventually t (Ball (x1 + v1 * t) (negate v2),Ball (x2 + v2 * t) (negate v1)) where
-    	t = (x2 - x1) / (v1 - v2)
+    | otherwise = earliest (do
+        t <- [(x2 - x1 + r1 + r2) / (v1 - v2),(x2 - x1 - r1 - r2) / (v1 - v2)]
+        guard (t >= 0)
+        return (Eventually t (
+            Ball r1 (x1 + v1 * t) v2,Ball r2 (x2 + v2 * t) v1)))
 
 sim2 :: (Ball,Ball) -> Stream (Ball,Ball)
 sim2 (ball1,ball2) = Stream (\t -> (roll ball1 t,roll ball2 t)) (fmap sim2 (collideBallBall ball1 ball2))
@@ -84,31 +91,38 @@ sim2 (ball1,ball2) = Stream (\t -> (roll ball1 t,roll ball2 t)) (fmap sim2 (coll
 renderBallPair :: (Ball,Ball) -> Picture
 renderBallPair (ball1,ball2) = pictures [render ball1,render ball2]
 
-nextCollisions :: [Wall] -> [Ball] -> Event [Ball]
-nextCollisions walls balls = earliest (map (uncurry (nextCollision walls)) (singleout balls))
-
 singleout :: [a] -> [(a,[a])]
 singleout [] = []
 singleout (a:as) = (a,as): do
 	(b,bs) <- singleout as
 	return (b,a:bs)
 
-collideBallBalls :: Ball -> [Ball] -> Event [Ball]
-collideBallBalls _ [] = Never
-collideBallBalls ball (otherball:balls) = earlier
-    (fmap (\(ball1,ball2) -> ball1:ball2:balls) (collideBallBall ball otherball))
-    (fmap (otherball:) (collideBallBalls ball balls))
+nextCollision :: [Wall] -> [Ball] -> Event [Ball]
+nextCollision walls balls = earliest (
+    wallBallCollisions walls balls ++ ballBallCollisions balls)
 
-collideBallWalls :: Ball -> [Wall] -> Event Ball
-collideBallWalls ball = earliest . map (collideBallWall ball)
+wallBallCollisions :: [Wall] -> [Ball] -> [Event [Ball]]
+wallBallCollisions walls balls = do
+    (ball,rest) <- singleout balls
+    wall <- walls
+    let collision = collideBallWall ball wall
+    case collision of
+        Never -> return Never
+        Eventually t ball' ->
+            return (Eventually t (ball' : map (flip roll t) rest))
 
-nextCollision :: [Wall] -> Ball -> [Ball] -> Event [Ball]
-nextCollision walls ball balls = earlier
-    (collideBallBalls ball balls)
-    (fmap (:balls) (collideBallWalls ball walls)) 
+ballBallCollisions :: [Ball] -> [Event [Ball]]
+ballBallCollisions balls = do
+    (ball1,rest1) <- singleout balls
+    (ball2,rest2) <- singleout rest1
+    let collision = collideBallBall ball1 ball2
+    case collision of
+        Never -> return Never
+        Eventually t (ball1',ball2') ->
+            return (Eventually t (ball1' : ball2' : map (flip roll t) rest2))
 
 sim3 :: [Wall] -> [Ball] -> Stream [Ball]
-sim3 walls balls = Stream (sequence (map roll balls)) (fmap (sim3 walls) (nextCollisions walls balls))
+sim3 walls balls = Stream (sequence (map roll balls)) (fmap (sim3 walls) (nextCollision walls balls))
 
 renderBallList :: [Ball] -> Picture
 renderBallList = pictures . map render
@@ -117,8 +131,8 @@ testwalls :: [Wall]
 testwalls = [Wall (-10),Wall 150]
 
 testballs :: [Ball]
-testballs = [Ball 0 17,Ball 80 (-10),Ball 100 10]
+testballs = [Ball 10 0 170,Ball 10 80 (-100),Ball 10 100 100]
 
 main :: IO ()
-main = run (fmap renderBallList (sim3 [] [Ball 20 50,Ball 30 130,Ball 160 (-30)]))
+main = run (fmap renderBallList (sim3 testwalls testballs))
 

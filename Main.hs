@@ -63,13 +63,12 @@ earliest = foldr earlier Never
 data Wall = Wall Float
 
 collideBallWall :: Ball -> Wall -> Event Ball
-collideBallWall (Ball r x v) (Wall w)
-    | v == 0 = Never
-    | otherwise = earliest (do
-        t <- [(w + r - x) / v,(w - r - x) / v]
-        guard (t >= 0)
-        return (Eventually t (Ball r (x + t * v) (negate v))))
-
+collideBallWall (Ball r x v) (Wall w) = earliest (do
+    guard (v /= 0)
+    let t = minimum [(w + r - x) / v,(w - r - x) / v]
+    guard (t > 0)
+    return (Eventually t (Ball r (x + t * v) (negate v))))
+        
 roll :: Ball -> T -> Ball
 roll (Ball r x v) t = Ball r (x + v * t) v
 
@@ -77,14 +76,12 @@ sim1 :: [Wall] -> Ball -> Stream Ball
 sim1 walls ball = Stream (roll ball) (fmap (sim1 walls) (earliest (map (collideBallWall ball) walls)))
 
 collideBallBall :: Ball -> Ball -> Event (Ball,Ball)
-collideBallBall (Ball r1 x1 v1) (Ball r2 x2 v2)
-    | v2 - v1 == 0 = Never
-    | otherwise = earliest (do
-        t <- [(x2 - x1 + r1 + r2) / (v1 - v2),(x2 - x1 - r1 - r2) / (v1 - v2)]
-        guard (t >= 0)
-        return (Eventually t (
-            Ball r1 (x1 + v1 * t) v2,Ball r2 (x2 + v2 * t) v1)))
-
+collideBallBall (Ball r1 x1 v1) (Ball r2 x2 v2) = earliest (do
+    guard (v2 - v1 /= 0.0)
+    let t = minimum [(x2 - x1 + r1 + r2) / (v1 - v2),(x2 - x1 - r1 - r2) / (v1 - v2)]
+    guard (t > 0)
+    return (Eventually t (Ball r1 (x1 + v1 * t) v2,Ball r2 (x2 + v2 * t) v1)))
+            
 sim2 :: (Ball,Ball) -> Stream (Ball,Ball)
 sim2 (ball1,ball2) = Stream (\t -> (roll ball1 t,roll ball2 t)) (fmap sim2 (collideBallBall ball1 ball2))
 

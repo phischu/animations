@@ -5,6 +5,7 @@ import Graphics.Gloss
 import Pipes
 import Pipes.Prelude (toList)
 import Data.Functor.Identity (Identity(runIdentity))
+import Control.Monad (forM_,forever)
 
 type T = Float
 
@@ -87,11 +88,7 @@ occurences' :: Event' a r -> [(T,a)]
 occurences' e = toList (e >> return ())
 
 animation :: Event Picture ()
-animation = do
-    fire (circle 10)
-    delay 2
-    fire (circle 200)
-    delay 2
+animation = whenever (fire 10 >> delay 2 >> fire 100 >> delay 2) (\r -> fire (circle r))
 
 test :: Event Int ()
 test = do

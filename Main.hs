@@ -29,16 +29,10 @@ andThen a b = a :< Just b
 switch :: Behavior a -> Event (Behavior a) -> Behavior a
 switch b (Free Nothing) = b
 switch _ (Pure b) = b
-switch (a :< Nothing) (Free (Just e)) = case e of
-    Free Nothing -> always a
-    Pure b -> b
-    Free (Just e) -> always a `switch` e
-switch (a :< Just b) (Free (Just e)) = case e of
-    Free Nothing -> b
-    Pure b -> b
-    Free (Just e') -> case b of
-        a' :< Nothing -> always a' `switch` e'
-        a' :< Just b' -> switch b' e'
+switch (a :< Nothing) (Free (Just e)) =
+    always a `switch` e
+switch (a :< Just b) (Free (Just e)) =
+    b `switch` e
 
 
 main :: IO ()

@@ -5,6 +5,7 @@ import Control.Monad.Free
 import Control.Comonad.Cofree
 import Control.Monad
 
+
 type Event = Free Maybe
 
 never :: Event a
@@ -34,14 +35,37 @@ switch (a :< Nothing) (Free (Just e)) =
 switch (a :< Just b) (Free (Just e)) =
     b `switch` e
 
+
 whenJust :: Behavior (Maybe a) -> Behavior (Event a)
 whenJust (Nothing :< Nothing) = always never
-whenJust (Just a :< Nothing) = always (occured a)
-whenJust (Just a :< Just b) =
-    occured a :< Just (whenJust b)
-whenJust (Nothing :< Just b) =
-    later e :< b' where
-        e :< b' = whenJust b
+whenJust (Just a :< _) = always (occured a)
+whenJust (Nothing :< Just b) = later e :< Just b'
+  where
+    b' = whenJust b
+    e :< _ = b'
+
+
+runBehavior :: Behavior (Event a) -> a
+runBehavior (Pure a :< _) = a
+runBehavior (Free Nothing :< _) = error "loop 1"
+runBehavior (Free (Just e) :< Nothing) = error "loop 2"
+runBehavior (_ :< Just b) = runBehavior b
+
+
+test :: Int -> Behavior (Event ())
+test n = whenTrue (do
+    i <- count
+    return (i == n))
+
+whenTrue :: Behavior Bool -> Behavior (Event ())
+whenTrue = whenJust . fmap boolToMaybe where
+    boolToMaybe True = Just ()
+    boolToMaybe False = Nothing
+
+count :: Behavior Int
+count = loop 0 where
+    loop i = i `andThen` loop (i+1)
+
 
 
 main :: IO ()

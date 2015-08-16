@@ -21,7 +21,7 @@ executable animations
   -- other-modules:       
   -- other-extensions:    
   build-depends:       base,
-                       gloss
+                       free
   -- hs-source-dirs:      
   default-language:    Haskell2010
   ghc-options:         -threaded

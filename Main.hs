@@ -45,6 +45,25 @@ whenJust (Nothing :< Just b) = later e :< Just b'
     e :< _ = b'
 
 
+async :: IO a -> Behavior (Event a)
+async = undefined
+
+lastLine :: Behavior String
+lastLine = loop "first line"
+  where
+    loop l = do
+        nextLine <- async getLine
+        always l `switch` fmap loop nextLine
+
+sync :: IO a -> Behavior a
+sync = undefined
+
+putChanges :: Behavior String -> Behavior ()
+putChanges b = do
+    s <- b
+    sync (putStrLn s)
+
+
 runBehavior :: Behavior (Event a) -> a
 runBehavior (Pure a :< _) = a
 runBehavior (Free Nothing :< _) = error "loop 1"

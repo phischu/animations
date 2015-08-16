@@ -34,6 +34,15 @@ switch (a :< Nothing) (Free (Just e)) =
 switch (a :< Just b) (Free (Just e)) =
     b `switch` e
 
+whenJust :: Behavior (Maybe a) -> Behavior (Event a)
+whenJust (Nothing :< Nothing) = always never
+whenJust (Just a :< Nothing) = always (occured a)
+whenJust (Just a :< Just b) =
+    occured a :< Just (whenJust b)
+whenJust (Nothing :< Just b) =
+    later e :< b' where
+        e :< b' = whenJust b
+
 
 main :: IO ()
 main = putStrLn "hi"

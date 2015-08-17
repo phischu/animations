@@ -31,37 +31,27 @@ switch :: Behavior a -> Event (Behavior a) -> Behavior a
 switch b (Free Nothing) = b
 switch _ (Pure b) = b
 switch (a :< Nothing) (Free (Just e)) =
-    always a `switch` e
+    a :< Just (always a `switch` e)
 switch (a :< Just b) (Free (Just e)) =
     b `switch` e
 
 
+count :: Behavior Int
+count = loop 0
+
+loop :: Int -> Behavior Int
+loop i = always i `switch` later (occured (loop (i+1)))
+
+
 whenJust :: Behavior (Maybe a) -> Behavior (Event a)
 whenJust (Nothing :< Nothing) = always never
-whenJust (Just a :< _) = always (occured a)
+whenJust (Just a :< Nothing) = always (occured a)
+whenJust (Just a :< Just b) =
+    occured a `andThen` whenJust b
 whenJust (Nothing :< Just b) = later e :< Just b'
   where
     b' = whenJust b
     e :< _ = b'
-
-
-async :: IO a -> Behavior (Event a)
-async = undefined
-
-lastLine :: Behavior String
-lastLine = loop "first line"
-  where
-    loop l = do
-        nextLine <- async getLine
-        always l `switch` fmap loop nextLine
-
-sync :: IO a -> Behavior a
-sync = undefined
-
-putChanges :: Behavior String -> Behavior ()
-putChanges b = do
-    s <- b
-    sync (putStrLn s)
 
 
 runBehavior :: Behavior (Event a) -> a
@@ -81,9 +71,6 @@ whenTrue = whenJust . fmap boolToMaybe where
     boolToMaybe True = Just ()
     boolToMaybe False = Nothing
 
-count :: Behavior Int
-count = loop 0 where
-    loop i = i `andThen` loop (i+1)
 
 
 

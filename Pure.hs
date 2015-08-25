@@ -1,35 +1,34 @@
 {-# LANGUAGE StandaloneDeriving, DeriveFunctor #-}
-module Main where
+module Pure where
 
 import Control.Monad.Free
 import Control.Comonad.Cofree
 import Control.Monad
-import Control.Monad.Trans.Maybe
 import Control.Applicative
 
 
-type Event = Free (MaybeT IO)
+type Event = Free Maybe
 
 never :: Event a
-never = Free (MaybeT (return Nothing))
+never = Free Nothing
 
 occured :: a -> Event a
 occured a = Pure a
 
 later :: Event a -> Event a
-later e = Free (MaybeT (return (Just e)))
+later e = Free (Just e)
 
 
-type Behavior = Cofree (MaybeT IO)
+type Behavior = Cofree Maybe
 
 now :: Behavior a -> a
 now (a :< _) = a
 
 always :: a -> Behavior a
-always a = a :< MaybeT (return Nothing)
+always a = a :< Nothing
 
 andThen :: a -> Behavior a -> Behavior a
-andThen a b = a :< MaybeT (return (Just b))
+andThen a b = a :< Just b
 
 
 switch :: Behavior a -> Event (Behavior a) -> Behavior a
@@ -43,14 +42,11 @@ whenJust (Nothing :< b) = Free e :< b' where
     e = fmap now b'
     b' = fmap whenJust b
 
-
-runBehavior :: Behavior (Event a) -> IO a
-runBehavior (Pure a :< _) = return a
-runBehavior (_ :< MaybeT b') = do
-    mb <- b'
-    case mb of
-        Nothing -> error "loop 2"
-        Just b -> runBehavior b
+runBehavior :: Behavior (Event a) -> a
+runBehavior (Pure a :< _) = a
+runBehavior (Free Nothing :< _) = error "loop 1"
+runBehavior (Free (Just e) :< Nothing) = error "loop 2"
+runBehavior (_ :< Just b) = runBehavior b
 
 
 test :: Int -> Behavior (Event ())

@@ -35,14 +35,6 @@ switch (a :< Nothing) (Free (Just e)) =
 switch (a :< Just b) (Free (Just e)) =
     b `switch` e
 
-
-count :: Behavior Int
-count = loop 0
-
-loop :: Int -> Behavior Int
-loop i = always i `switch` later (occured (loop (i+1)))
-
-
 whenJust :: Behavior (Maybe a) -> Behavior (Event a)
 whenJust (Nothing :< Nothing) = always never
 whenJust (Just a :< Nothing) = always (occured a)
@@ -66,12 +58,22 @@ test n = whenTrue (do
     i <- count
     return (i == n))
 
+count :: Behavior Int
+count = loop 0
+
+loop :: Int -> Behavior Int
+loop i = always i `switch` later (occured (loop (i+1)))
+
 whenTrue :: Behavior Bool -> Behavior (Event ())
 whenTrue = whenJust . fmap boolToMaybe where
     boolToMaybe True = Just ()
     boolToMaybe False = Nothing
 
-
+p :: Behavior (Int,Int)
+p = do
+    x <- always 5
+    y <- count
+    return (x,y)
 
 
 main :: IO ()

@@ -46,6 +46,27 @@ whenJust (Nothing :< b) = Free e :< b' where
     e = fmap now b'
     b' = fmap whenJust b
 
+async :: IO a -> IO (Event a)
+async io = do
+    resultRef <- newIORef Nothing
+    forkIO (io >>= writeIORef resultRef . Just)
+    let go = do
+            r <- lift (readIORef resultRef)
+            case r of
+                Nothing -> return (Free go)
+                Just a -> return (Pure a)
+    return (Free go)
+
+poll :: IO a -> IO (Behavior a)
+poll io = do
+    a <- io
+    return (a :< lift (poll io))
+
+plan :: Event (IO a) -> IO (Event a)
+plan (Pure io) = fmap occured io
+plan (Free e) = return (Free (do
+    e' <- e
+    lift (plan e')))
 
 runMaster :: Behavior (Event a) -> IO a
 runMaster (Pure a :< _) = return a
@@ -71,28 +92,6 @@ runEvent (Free me) = runMaybeT me >>= maybe (putStrLn "never") (\e -> do
     threadDelay 500000
     runEvent e)
 
-
-async :: IO a -> IO (Event a)
-async io = do
-    resultRef <- newIORef Nothing
-    forkIO (io >>= writeIORef resultRef . Just)
-    let go = do
-            r <- lift (readIORef resultRef)
-            case r of
-                Nothing -> return (Free go)
-                Just a -> return (Pure a)
-    return (Free go)
-
-poll :: IO a -> IO (Behavior a)
-poll io = do
-    a <- io
-    return (a :< lift (poll io))
-
-plan :: Event (IO a) -> IO (Event a)
-plan (Pure io) = fmap occured io
-plan (Free e) = return (Free (do
-    e' <- e
-    lift (plan e')))
 
 main :: IO ()
 main = do

@@ -6,91 +6,81 @@ import Control.Comonad.Cofree
 import Control.Monad
 import Control.Monad.Trans.Class
 import Control.Monad.Trans.Maybe
+import Control.Monad.IO.Class
 import Control.Applicative
 import Data.IORef
 import Control.Concurrent
 
 
-type Event = Free (MaybeT IO)
+type Event m = Free m
 
-never :: Event a
-never = Free (MaybeT (return Nothing))
+never :: (Applicative m) => Event m a
+never = later never
 
-occured :: a -> Event a
-occured a = Pure a
+occured :: (Functor m) => a -> Event m a
+occured a = pure a
 
-later :: Event a -> Event a
-later e = Free (MaybeT (return (Just e)))
+later :: (Applicative m) => Event m a -> Event m a
+later e = Free (pure e)
 
 
-type Behavior = Cofree (MaybeT IO)
+type Behavior m = Cofree m
 
-now :: Behavior a -> a
+now :: Behavior m a -> a
 now (a :< _) = a
 
-always :: a -> Behavior a
-always a = a :< MaybeT (return Nothing)
+always :: (Applicative m) => a -> Behavior m a
+always a = a :< pure (always a)
 
-andThen :: a -> Behavior a -> Behavior a
-andThen a b = a :< MaybeT (return (Just b))
+andThen :: (Applicative m) => a -> Behavior m a -> Behavior m a
+andThen a b = a :< pure b
 
 
-switch :: Behavior a -> Event (Behavior a) -> Behavior a
+switch :: (Applicative m) => Behavior m a -> Event m (Behavior m a) -> Behavior m a
 switch _ (Pure b) = b
-switch (a :< b) (Free e) = a :< liftM2 switch b' e where
-    b' = b <|> return (always a)
+switch (a :< b) (Free e) = a :< liftA2 switch b e
 
-whenJust :: Behavior (Maybe a) -> Behavior (Event a)
+whenJust :: (Applicative m) => Behavior m (Maybe a) -> Behavior m (Event m a)
 whenJust (Just a :< _) = always (occured a)
 whenJust (Nothing :< b) = Free e :< b' where
     e = fmap now b'
     b' = fmap whenJust b
 
-async :: IO a -> IO (Event a)
+async :: (MonadIO m) => IO a -> m (Event m a)
 async io = do
-    resultRef <- newIORef Nothing
-    forkIO (io >>= writeIORef resultRef . Just)
+    resultRef <- liftIO (newIORef Nothing)
+    liftIO (forkIO (io >>= writeIORef resultRef . Just))
     let go = do
-            r <- lift (readIORef resultRef)
+            r <- liftIO (readIORef resultRef)
             case r of
                 Nothing -> return (Free go)
                 Just a -> return (Pure a)
     return (Free go)
 
-poll :: IO a -> IO (Behavior a)
-poll io = do
-    a <- io
-    return (a :< lift (poll io))
+poll :: (Monad m) => m a -> m (Behavior m a)
+poll ma = do
+    a <- ma
+    return (a :< (poll ma))
 
-plan :: Event (IO a) -> IO (Event a)
-plan (Pure io) = fmap occured io
-plan (Free e) = return (Free (do
-    e' <- e
-    lift (plan e')))
+plan :: (Monad m, Functor m) => Event m (m a) -> m (Event m a)
+plan (Pure ma) = fmap occured ma
+plan (Free me) = return (Free (me >>= plan))
 
-runMaster :: Behavior (Event a) -> IO a
-runMaster (Pure a :< _) = return a
-runMaster (_ :< mb) =
-    runMaybeT mb >>= maybe (error "runBehavior loop") (\b -> do
-        threadDelay 500000
-        runMaster b)
-
-waitEvent :: Event () -> IO ()
+waitEvent :: (Monad m) => Event m () -> m ()
 waitEvent (Pure ()) = return ()
-waitEvent (Free me) = do
-    runMaybeT me >>= maybe (putStrLn "waitEvent loop") waitEvent
+waitEvent (Free me) = me >>= waitEvent
 
-runBehavior :: (Show a) => Behavior a -> IO ()
+runBehavior :: (Show a, MonadIO m) => Behavior m a -> m [a]
 runBehavior(a :< mb) = do
-    print a
-    runMaybeT mb >>= maybe (putStrLn "fini") runBehavior
+    liftIO (print a)
+    mb >>= runBehavior
 
-runEvent :: (Show a) => Event a -> IO ()
-runEvent (Pure a) = print a
-runEvent (Free me) = runMaybeT me >>= maybe (putStrLn "never") (\e -> do
-    putStrLn "."
-    threadDelay 500000
-    runEvent e)
+runEvent :: (Show a, MonadIO m) => Event m a -> m ()
+runEvent (Pure a) = liftIO (print a)
+runEvent (Free me) = do
+    e <- me
+    liftIO (putStrLn "." >> threadDelay 500000)
+    runEvent e
 
 
 main :: IO ()
@@ -111,18 +101,18 @@ count = loop 0 where
                 return (pure i `switch` e')
 -}
 
-test :: Int -> IO (Event ())
+test :: Int -> IO (Event IO ())
 test n = do b <- count
             e <- return (now (whenTrue ((n ==) <$> b)))
             return e
 
-count :: IO (Behavior Int)
+count :: IO (Behavior IO Int)
 count = loop 0 where
     loop i = do e <- async (return ())
                 e' <- plan (loop (i+1) <$ e)
                 return (pure i `switch` e')
 
-whenTrue :: Behavior Bool -> Behavior (Event ())
+whenTrue :: (Applicative m) => Behavior m Bool -> Behavior m (Event m ())
 whenTrue = whenJust . fmap boolToMaybe where
     boolToMaybe True = Just ()
     boolToMaybe False = Nothing

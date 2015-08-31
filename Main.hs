@@ -47,22 +47,41 @@ whenJust (Nothing :< b) = Free e :< b' where
     b' = fmap whenJust b
 
 
-runBehavior :: Behavior (Event a) -> IO a
-runBehavior (Pure a :< _) = return a
-runBehavior (_ :< b) =
-    runMaybeT b >>= maybe (error "runBehavior loop") runBehavior
+runMaster :: Behavior (Event a) -> IO a
+runMaster (Pure a :< _) = return a
+runMaster (_ :< mb) =
+    runMaybeT mb >>= maybe (error "runBehavior loop") (\b -> do
+        threadDelay 500000
+        runMaster b)
 
+waitEvent :: Event () -> IO ()
+waitEvent (Pure ()) = return ()
+waitEvent (Free me) = do
+    runMaybeT me >>= maybe (putStrLn "waitEvent loop") waitEvent
 
-runEvent :: Event a -> IO a
-runEvent (Pure a) = return a
-runEvent (Free (MaybeT io)) = io >>= maybe (error "runEvent loop") runEvent
+runBehavior :: (Show a) => Behavior a -> IO ()
+runBehavior(a :< mb) = do
+    print a
+    runMaybeT mb >>= maybe (putStrLn "fini") runBehavior
+
+runEvent :: (Show a) => Event a -> IO ()
+runEvent (Pure a) = print a
+runEvent (Free me) = runMaybeT me >>= maybe (putStrLn "never") (\e -> do
+    putStrLn "."
+    threadDelay 500000
+    runEvent e)
+
 
 async :: IO a -> IO (Event a)
 async io = do
     resultRef <- newIORef Nothing
     forkIO (io >>= writeIORef resultRef . Just)
-    b <- poll (readIORef resultRef)
-    return (now (whenJust b))
+    let go = do
+            r <- lift (readIORef resultRef)
+            case r of
+                Nothing -> return (Free go)
+                Just a -> return (Pure a)
+    return (Free go)
 
 poll :: IO a -> IO (Behavior a)
 poll io = do
@@ -71,15 +90,13 @@ poll io = do
 
 plan :: Event (IO a) -> IO (Event a)
 plan (Pure io) = fmap occured io
-plan (Free e) = runMaybeT e >>= maybe (return never) plan
-
-
-n :: Int
-n = 11
+plan (Free e) = return (Free (do
+    e' <- e
+    lift (plan e')))
 
 main :: IO ()
 main = do
-    e <- test n
+    e <- test 11000
     runEvent e
 
 {-

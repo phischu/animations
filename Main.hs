@@ -1,131 +1,118 @@
 {-# LANGUAGE StandaloneDeriving, DeriveFunctor #-}
 module Main where
 
-import Control.Monad.Free
-import Control.Comonad.Cofree
-import Control.Monad
-import Control.Monad.Trans.Class
-import Control.Monad.Trans.Maybe
 import Control.Comonad
 import Control.Applicative
 import Data.IORef
 import Control.Concurrent
 
 
-type Next = MaybeT IO
 
-type Event = Free Next
+type Behavior = BehaviorT Next
 
-type Behavior = Cofree Next
+type Event = EventT Next
+
+type Next = IO
 
 
-never :: Event a
-never = Free (MaybeT (return Nothing))
+data EventT m a =
+    Occured a |
+    Later (m (EventT m a))
+      deriving (Functor)
 
-occured :: a -> Event a
-occured a = Pure a
+instance (Applicative m) => Applicative (EventT m) where
+    pure = Occured
+    Occured f <*> Occured x = pure (f x)
+    Occured f <*> Later mx = Later (liftA2 (<*>) (pure (Occured f)) mx)
+    Later mf <*> Occured x = Later (liftA2 (<*>) mf (pure (Occured x)))
+    Later mf <*> Later mx = Later (liftA2 (<*>) mf mx)
 
-later :: Next (Event a) -> Event a
-later e = Free e
 
-inspect :: Event a -> Either a (Next (Event a))
-inspect (Pure a) = Left a
-inspect (Free e) = Right e
+data BehaviorT m a = AndThen {
+    now :: a,
+    future :: m (BehaviorT m a)}
+      deriving (Functor)
+
+instance (Applicative m) => Applicative (BehaviorT m) where
+    pure a = a `AndThen` pure (pure a)
+    (f `AndThen` mf) <*> (x `AndThen` mx) = f x `AndThen` liftA2 (<*>) mf mx
 
 
 always :: a -> Behavior a
-always a = a :< MaybeT (return Nothing)
+always a = a `andThen` return (always a)
 
-now :: Behavior a -> a
-now (a :< _) = a
+never :: Event a
+never = Later (return never)
 
-future :: Behavior a -> Next (Behavior a)
-future (_ :< b) = b
 
 andThen :: a -> Next (Behavior a) -> Behavior a
-andThen a b = a :< b
+andThen = AndThen
+
+occured :: a -> Event a
+occured = Occured
+
+later :: Next (Event a) -> Event a
+later = Later
+
 
 delay :: a -> Next a
 delay = return
 
 switch :: Behavior a -> Event (Behavior a) -> Behavior a
-switch b e = case inspect e of
-    Left b' -> b'
-    Right e' -> a `andThen` liftA2 switch b' e'
-      where
-        a = now b
-        b' = future b <|> delay (always a)
+switch b e = case e of
+    Occured b' -> b'
+    Later e' -> now b `AndThen` liftA2 switch (future b) e'
 
 whenJust :: Behavior (Maybe a) -> Behavior (Event a)
 whenJust b = case now b of
     Just a -> always (occured a)
-    Nothing -> later e `andThen` b'
+    Nothing -> later e `AndThen` b'
       where
         b' = fmap whenJust (future b)
         e = fmap now b'
 
 plan :: Event (IO a) -> IO (Event a)
-plan e = case inspect e of
-    Left io -> fmap occured io
-    Right nextEvent -> return (later (do
-        event <- nextEvent
-        lift (plan event)))
+plan e = case e of
+    Occured io -> fmap occured io
+    Later nextEvent -> return (later (nextEvent >>= plan))
 
 poll :: Behavior (IO a) -> IO (Behavior a)
 poll b = do
-    let io = now b
-    a <- io
-    return (a `andThen` (do
-        b' <- future b <|> delay (always io)
-        lift (poll b')))
+    a <- now b
+    return (a `andThen` (future b >>= poll))
 
 async :: IO a -> IO (Event a)
 async io = do
     resultRef <- newIORef Nothing
     forkIO (io >>= writeIORef resultRef . Just)
     let go = do
-            r <- lift (readIORef resultRef)
+            r <- readIORef resultRef
             case r of
-                Nothing -> return (Free go)
-                Just a -> return (Pure a)
-    return (Free go)
+                Nothing -> return (Later go)
+                Just a -> return (Occured a)
+    return (Later go)
 
-
-
-
-runMaster :: Behavior (Event a) -> IO a
-runMaster (Pure a :< _) = return a
-runMaster (_ :< mb) =
-    runMaybeT mb >>= maybe (error "runBehavior loop") (\b -> do
-        threadDelay 500000
-        runMaster b)
-
-waitEvent :: Event () -> IO ()
-waitEvent (Pure ()) = return ()
-waitEvent (Free me) = do
-    runMaybeT me >>= maybe (putStrLn "waitEvent loop") waitEvent
+waitEvent :: Event a -> IO ()
+waitEvent (Occured _) = return ()
+waitEvent (Later me) = me >>= waitEvent
 
 runBehavior :: (Show a) => Behavior a -> IO ()
-runBehavior(a :< mb) = do
+runBehavior(a `AndThen` mb) = do
     print a
-    runMaybeT mb >>= maybe (putStrLn "fini") runBehavior
+    mb >>= runBehavior
 
 runEvent :: (Show a) => Event a -> IO ()
-runEvent (Pure a) = print a
-runEvent (Free me) = runMaybeT me >>= maybe (putStrLn "never") (\e -> do
+runEvent (Occured a) = print a
+runEvent (Later me) = me >>= (\e -> do
     putStrLn "."
     threadDelay 500000
     runEvent e)
 
 
-what :: IO ()
-what = do
-    inputs <- poll (always getLine)
-    runBehavior (accum "" (fmap (++) inputs))
 
 main :: IO ()
 main = do
-    e <- test 11
+    e <- test 11000
     waitEvent e
 
 {-
@@ -182,6 +169,13 @@ accum a b =
 
 
 wait :: Event a -> Behavior (Event a)
-wait e = case inspect e of
-    Left a -> always (occured a)
-    Right e' -> later e' `andThen` fmap wait e'
+wait e = case e of
+    Occured a -> always (occured a)
+    Later e' -> later e' `andThen` fmap wait e'
+
+{-
+what :: IO ()
+what = do
+    inputs <- poll (always getLine)
+    runBehavior (accum "" (fmap (++) inputs))
+-}

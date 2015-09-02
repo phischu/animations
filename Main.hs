@@ -14,6 +14,32 @@ type Event = EventT Next
 
 type Next = IO
 
+now :: Behavior a -> a
+now = _now
+
+future :: Behavior a -> Next (Behavior a)
+future = _future
+
+always :: a -> Behavior a
+always a = a `andThen` return (always a)
+
+andThen :: a -> Next (Behavior a) -> Behavior a
+andThen = AndThen
+
+
+never :: Event a
+never = Later (return never)
+
+occured :: a -> Event a
+occured = Occured
+
+later :: Next (Event a) -> Event a
+later = Later
+
+
+delay :: a -> Next a
+delay = return
+
 
 data EventT m a =
     Occured a |
@@ -29,8 +55,8 @@ instance (Applicative m) => Applicative (EventT m) where
 
 
 data BehaviorT m a = AndThen {
-    now :: a,
-    future :: m (BehaviorT m a)}
+    _now :: a,
+    _future :: m (BehaviorT m a)}
       deriving (Functor)
 
 instance (Applicative m) => Applicative (BehaviorT m) where
@@ -38,25 +64,7 @@ instance (Applicative m) => Applicative (BehaviorT m) where
     (f `AndThen` mf) <*> (x `AndThen` mx) = f x `AndThen` liftA2 (<*>) mf mx
 
 
-always :: a -> Behavior a
-always a = a `andThen` return (always a)
 
-never :: Event a
-never = Later (return never)
-
-
-andThen :: a -> Next (Behavior a) -> Behavior a
-andThen = AndThen
-
-occured :: a -> Event a
-occured = Occured
-
-later :: Next (Event a) -> Event a
-later = Later
-
-
-delay :: a -> Next a
-delay = return
 
 switch :: Behavior a -> Event (Behavior a) -> Behavior a
 switch b e = case e of

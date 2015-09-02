@@ -93,12 +93,9 @@ async :: IO a -> IO (Event a)
 async io = do
     resultRef <- newIORef Nothing
     forkIO (io >>= writeIORef resultRef . Just)
-    let go = do
-            r <- readIORef resultRef
-            case r of
-                Nothing -> return (Later go)
-                Just a -> return (Occured a)
-    return (Later go)
+    b <- poll (always (readIORef resultRef))
+    return (later (pure (now (whenJust b))))
+
 
 waitEvent :: Event a -> IO ()
 waitEvent (Occured _) = return ()

@@ -73,9 +73,10 @@ plan e = case inspect e of
 
 poll :: Behavior (IO a) -> IO (Behavior a)
 poll b = do
-    a <- now b
+    let io = now b
+    a <- io
     return (a `andThen` (do
-        b' <- future b
+        b' <- future b <|> delay (always io)
         lift (poll b')))
 
 async :: IO a -> IO (Event a)
@@ -117,12 +118,14 @@ runEvent (Free me) = runMaybeT me >>= maybe (putStrLn "never") (\e -> do
     runEvent e)
 
 
-what :: Behavior Int
-what = liftM2 (+) (always 5) (5 `andThen` delay (6 `andThen` delay (always 7)))
+what :: IO ()
+what = do
+    inputs <- poll (always getLine)
+    runBehavior (accum "" (fmap (++) inputs))
 
 main :: IO ()
 main = do
-    e <- test 11000
+    e <- test 11
     waitEvent e
 
 {-
@@ -154,6 +157,28 @@ whenTrue = whenJust . fmap boolToMaybe where
     boolToMaybe True = Just ()
     boolToMaybe False = Nothing
 
+
+register :: Event a -> ((a -> IO ()) -> IO ())
+register event handler = do
+    plan (fmap handler event)
+    return ()
+
+callback :: IO (a -> IO (), Event a)
+callback = error "not implemented: callback"
+
+whenCalled :: ((a -> IO ()) -> IO ()) -> IO (Event a)
+whenCalled k = do
+    (handler, event) <- callback
+    k handler
+    return event
+
+
+accum :: a -> Behavior (a -> a) -> Behavior a
+accum a b =
+    let f = now b
+        b' = future b
+        a' = f a
+    in a' `andThen` fmap (accum a') b'
 
 
 wait :: Event a -> Behavior (Event a)

@@ -12,7 +12,12 @@ import Data.IORef
 import Control.Concurrent
 
 
-type Event = Free (MaybeT IO)
+type Next = MaybeT IO
+
+type Event = Free Next
+
+type Behavior = Cofree Next
+
 
 never :: Event a
 never = Free (MaybeT (return Nothing))
@@ -20,37 +25,58 @@ never = Free (MaybeT (return Nothing))
 occured :: a -> Event a
 occured a = Pure a
 
-later :: Event a -> Event a
-later e = Free (return e)
+later :: Next (Event a) -> Event a
+later e = Free e
 
+inspect :: Event a -> Either a (Next (Event a))
+inspect (Pure a) = Left a
+inspect (Free e) = Right e
 
-type Behavior = Cofree (MaybeT IO)
-
-now :: Behavior a -> a
-now (a :< _) = a
 
 always :: a -> Behavior a
 always a = a :< MaybeT (return Nothing)
 
-andThen :: a -> Behavior a -> Behavior a
-andThen a b = a :< MaybeT (return (Just b))
+now :: Behavior a -> a
+now (a :< _) = a
 
+future :: Behavior a -> Next (Behavior a)
+future (_ :< b) = b
 
-wait :: Event a -> Behavior (Event a)
-wait (Pure a) = always (occured a)
-wait (Free e) = Free e :< fmap wait e
+andThen :: a -> Next (Behavior a) -> Behavior a
+andThen a b = a :< b
 
+delay :: a -> Next a
+delay = return
 
 switch :: Behavior a -> Event (Behavior a) -> Behavior a
-switch _ (Pure b) = b
-switch (a :< b) (Free e) = a :< liftM2 switch b' e where
-    b' = b <|> return (always a)
+switch b e = case inspect e of
+    Left b' -> b'
+    Right e' -> a `andThen` liftA2 switch b' e'
+      where
+        a = now b
+        b' = future b <|> delay (always a)
 
 whenJust :: Behavior (Maybe a) -> Behavior (Event a)
-whenJust (Just a :< _) = always (occured a)
-whenJust (Nothing :< b) = Free e :< b' where
-    e = fmap now b'
-    b' = fmap whenJust b
+whenJust b = case now b of
+    Just a -> always (occured a)
+    Nothing -> later e `andThen` b'
+      where
+        b' = fmap whenJust (future b)
+        e = fmap now b'
+
+plan :: Event (IO a) -> IO (Event a)
+plan e = case inspect e of
+    Left io -> fmap occured io
+    Right nextEvent -> return (later (do
+        event <- nextEvent
+        lift (plan event)))
+
+poll :: Behavior (IO a) -> IO (Behavior a)
+poll b = do
+    a <- now b
+    return (a `andThen` (do
+        b' <- future b
+        lift (poll b')))
 
 async :: IO a -> IO (Event a)
 async io = do
@@ -63,15 +89,8 @@ async io = do
                 Just a -> return (Pure a)
     return (Free go)
 
-poll :: Behavior (IO a) -> IO (Behavior a)
-poll (io :< mb) = do
-    a <- io
-    let mb' = mb <|> return (always io)
-    return (a :< (mb' >>= lift . poll))
 
-plan :: Event (IO a) -> IO (Event a)
-plan (Pure io) = fmap occured io
-plan (Free e) = return (Free (e >>= lift . plan))
+
 
 runMaster :: Behavior (Event a) -> IO a
 runMaster (Pure a :< _) = return a
@@ -98,9 +117,12 @@ runEvent (Free me) = runMaybeT me >>= maybe (putStrLn "never") (\e -> do
     runEvent e)
 
 
+what :: Behavior Int
+what = liftM2 (+) (always 5) (5 `andThen` delay (6 `andThen` delay (always 7)))
+
 main :: IO ()
 main = do
-    e <- test 11
+    e <- test 11000
     waitEvent e
 
 {-
@@ -131,3 +153,10 @@ whenTrue :: Behavior Bool -> Behavior (Event ())
 whenTrue = whenJust . fmap boolToMaybe where
     boolToMaybe True = Just ()
     boolToMaybe False = Nothing
+
+
+
+wait :: Event a -> Behavior (Event a)
+wait e = case inspect e of
+    Left a -> always (occured a)
+    Right e' -> later e' `andThen` fmap wait e'

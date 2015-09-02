@@ -6,6 +6,7 @@ import Control.Comonad.Cofree
 import Control.Monad
 import Control.Monad.Trans.Class
 import Control.Monad.Trans.Maybe
+import Control.Comonad
 import Control.Applicative
 import Data.IORef
 import Control.Concurrent
@@ -20,7 +21,7 @@ occured :: a -> Event a
 occured a = Pure a
 
 later :: Event a -> Event a
-later e = Free (MaybeT (return (Just e)))
+later e = Free (return e)
 
 
 type Behavior = Cofree (MaybeT IO)
@@ -33,6 +34,11 @@ always a = a :< MaybeT (return Nothing)
 
 andThen :: a -> Behavior a -> Behavior a
 andThen a b = a :< MaybeT (return (Just b))
+
+
+wait :: Event a -> Behavior (Event a)
+wait (Pure a) = always (occured a)
+wait (Free e) = Free e :< fmap wait e
 
 
 switch :: Behavior a -> Event (Behavior a) -> Behavior a
@@ -57,16 +63,15 @@ async io = do
                 Just a -> return (Pure a)
     return (Free go)
 
-poll :: IO a -> IO (Behavior a)
-poll io = do
+poll :: Behavior (IO a) -> IO (Behavior a)
+poll (io :< mb) = do
     a <- io
-    return (a :< lift (poll io))
+    let mb' = mb <|> return (always io)
+    return (a :< (mb' >>= lift . poll))
 
 plan :: Event (IO a) -> IO (Event a)
 plan (Pure io) = fmap occured io
-plan (Free e) = return (Free (do
-    e' <- e
-    lift (plan e')))
+plan (Free e) = return (Free (e >>= lift . plan))
 
 runMaster :: Behavior (Event a) -> IO a
 runMaster (Pure a :< _) = return a
@@ -95,8 +100,8 @@ runEvent (Free me) = runMaybeT me >>= maybe (putStrLn "never") (\e -> do
 
 main :: IO ()
 main = do
-    e <- test 11000
-    runEvent e
+    e <- test 11
+    waitEvent e
 
 {-
 test :: Int -> Now (Event ())

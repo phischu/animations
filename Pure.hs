@@ -4,6 +4,7 @@ module Pure where
 import Control.Monad.Free
 import Control.Comonad.Cofree
 import Control.Monad
+import Control.Comonad
 import Control.Applicative
 
 
@@ -31,10 +32,16 @@ andThen :: a -> Behavior a -> Behavior a
 andThen a b = a :< Just b
 
 
+wait :: Event a -> Behavior (Event a)
+wait (Pure a) = always (occured a)
+wait (Free e) = Free e :< fmap wait e
+
+
 switch :: Behavior a -> Event (Behavior a) -> Behavior a
 switch _ (Pure b) = b
 switch (a :< b) (Free e) = a :< liftM2 switch b' e where
     b' = b <|> return (always a)
+
 
 whenJust :: Behavior (Maybe a) -> Behavior (Event a)
 whenJust (Just a :< _) = always (occured a)

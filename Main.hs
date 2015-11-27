@@ -5,7 +5,8 @@ import Control.Comonad
 import Control.Applicative
 import Data.IORef
 import Control.Concurrent
-
+import Control.Monad.IO.Class
+import Data.Time
 
 
 type Behavior = BehaviorT Next
@@ -71,54 +72,69 @@ switch b e = case e of
     Occured b' -> b'
     Later e' -> now b `AndThen` liftA2 switch (future b) e'
 
-whenJust :: Behavior (Maybe a) -> Behavior (Event a)
+whenJust :: Behavior (Maybe a) -> Event a
 whenJust b = case now b of
-    Just a -> always (occured a)
-    Nothing -> later e `AndThen` b'
-      where
-        b' = fmap whenJust (future b)
-        e = fmap now b'
+    Just a -> occured a
+    Nothing -> later (fmap whenJust (future b))
 
-plan :: Event (IO a) -> IO (Event a)
+plan :: Event (Next a) -> Next (Event a)
 plan e = case e of
-    Occured io -> fmap occured io
-    Later nextEvent -> return (later (nextEvent >>= plan))
+  Occured io -> fmap occured io
+  Later nextEvent -> return (later (nextEvent >>= plan))
 
-poll :: Behavior (IO a) -> IO (Behavior a)
+poll :: Behavior (Next a) -> Next (Behavior a)
 poll b = do
-    a <- now b
-    return (a `andThen` (future b >>= poll))
-
-async :: IO a -> IO (Event a)
-async io = do
-    resultRef <- newIORef Nothing
-    forkIO (io >>= writeIORef resultRef . Just)
-    b <- poll (always (readIORef resultRef))
-    return (later (pure (now (whenJust b))))
-
+  a <- now b
+  return (a `andThen` (future b >>= poll))
 
 waitEvent :: Event a -> IO ()
 waitEvent (Occured _) = return ()
 waitEvent (Later me) = me >>= waitEvent
 
-runBehavior :: (Show a) => Behavior a -> IO ()
-runBehavior(a `AndThen` mb) = do
-    print a
-    mb >>= runBehavior
+runBehavior :: Next (Behavior a) -> IO ()
+runBehavior nextBehavior = do
+  behavior <- runNext nextBehavior
+  runBehavior (future behavior)
 
-runEvent :: (Show a) => Event a -> IO ()
-runEvent (Occured a) = print a
-runEvent (Later me) = me >>= (\e -> do
-    putStrLn "."
-    threadDelay 500000
-    runEvent e)
+runEvent :: Next (Event a) -> IO ()
+runEvent nextEvent = do
+  event <- runNext nextEvent
+  case event of
+    Occured a -> return ()
+    Later nextEvent' -> runEvent nextEvent'
 
+runNext :: Next a -> IO a
+runNext next = next
 
+getLines :: Next (Behavior String)
+getLines = poll (always (liftIO getLine))
+
+getCurrentTimes :: Next (Behavior UTCTime)
+getCurrentTimes = poll (always (liftIO getCurrentTime))
+
+timeSince :: UTCTime -> Next (Behavior NominalDiffTime)
+timeSince startTime = fmap (fmap diffStartTime) getCurrentTimes where
+  diffStartTime = flip diffUTCTime startTime
 
 main :: IO ()
-main = do
-    e <- test 11000
-    waitEvent e
+main = runEvent (do
+
+  startTime <- liftIO getCurrentTime
+  times <- timeSince startTime
+
+  userInput <- getLines
+
+  let timesWithUserInput = liftA2 (,) times userInput
+  shouldQuit <- poll (fmap userExit timesWithUserInput)
+
+  pure (whenTrue shouldQuit))
+
+userExit :: (NominalDiffTime, String) -> Next Bool
+userExit (_, "exit") =
+  pure True
+userExit (time, input) = do
+  liftIO (putStrLn (show time ++ ": " ++ input))
+  pure False
 
 {-
 test :: Int -> Now (Event ())
@@ -133,22 +149,10 @@ count = loop 0 where
                 return (pure i `switch` e')
 -}
 
-test :: Int -> IO (Event ())
-test n = do b <- count
-            e <- return (now (whenTrue ((n ==) <$> b)))
-            return e
-
-count :: IO (Behavior Int)
-count = loop 0 where
-    loop i = do e <- async (return ())
-                e' <- plan (loop (i+1) <$ e)
-                return (pure i `switch` e')
-
-whenTrue :: Behavior Bool -> Behavior (Event ())
-whenTrue = whenJust . fmap boolToMaybe where
-    boolToMaybe True = Just ()
-    boolToMaybe False = Nothing
-
+whenTrue :: Behavior Bool -> Event ()
+whenTrue behavior = case now behavior of
+  True -> occured ()
+  False -> later (fmap whenTrue (future behavior))
 
 register :: Event a -> ((a -> IO ()) -> IO ())
 register event handler = do

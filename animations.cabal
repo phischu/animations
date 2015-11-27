@@ -23,7 +23,8 @@ executable animations
   build-depends:       base,
                        free,
                        transformers,
-                       comonad
+                       comonad,
+                       time
   -- hs-source-dirs:      
   default-language:    Haskell2010
   ghc-options:         -threaded

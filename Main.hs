@@ -1,4 +1,4 @@
-{-# LANGUAGE StandaloneDeriving, DeriveFunctor #-}
+{-# LANGUAGE StandaloneDeriving, DeriveFunctor, GeneralizedNewtypeDeriving #-}
 module Main where
 
 import Control.Comonad
@@ -13,7 +13,8 @@ type Behavior = BehaviorT Next
 
 type Event = EventT Next
 
-type Next = IO
+newtype Next a = Next {runNext :: IO a}
+  deriving (Functor, Applicative)
 
 now :: Behavior a -> a
 now = _now
@@ -22,14 +23,14 @@ future :: Behavior a -> Next (Behavior a)
 future = _future
 
 always :: a -> Behavior a
-always a = a `andThen` return (always a)
+always a = a `andThen` pure (always a)
 
 andThen :: a -> Next (Behavior a) -> Behavior a
 andThen = AndThen
 
 
 never :: Event a
-never = Later (return never)
+never = Later (pure never)
 
 occured :: a -> Event a
 occured = Occured
@@ -39,8 +40,10 @@ later = Later
 
 
 delay :: a -> Next a
-delay = return
+delay = pure
 
+syncIO :: IO a -> Next a
+syncIO = Next
 
 data EventT m a =
     Occured a |
@@ -73,23 +76,18 @@ switch b e = case e of
     Later e' -> now b `AndThen` liftA2 switch (future b) e'
 
 whenJust :: Behavior (Maybe a) -> Event a
-whenJust b = case now b of
+whenJust behavior = case now behavior of
     Just a -> occured a
-    Nothing -> later (fmap whenJust (future b))
+    Nothing -> later (fmap whenJust (future behavior))
 
 plan :: Event (Next a) -> Next (Event a)
-plan e = case e of
-  Occured io -> fmap occured io
-  Later nextEvent -> return (later (nextEvent >>= plan))
+plan event = case event of
+  Occured nextA -> fmap occured nextA
+  Later nextEvent -> fmap (later . plan) nextEvent
 
 poll :: Behavior (Next a) -> Next (Behavior a)
-poll b = do
-  a <- now b
-  return (a `andThen` (future b >>= poll))
-
-waitEvent :: Event a -> IO ()
-waitEvent (Occured _) = return ()
-waitEvent (Later me) = me >>= waitEvent
+poll behavior =
+  liftA2 andThen (now behavior) (fmap poll (future behavior))
 
 runBehavior :: Next (Behavior a) -> IO ()
 runBehavior nextBehavior = do
@@ -100,40 +98,35 @@ runEvent :: Next (Event a) -> IO ()
 runEvent nextEvent = do
   event <- runNext nextEvent
   case event of
-    Occured a -> return ()
+    Occured _ -> return ()
     Later nextEvent' -> runEvent nextEvent'
 
-runNext :: Next a -> IO a
-runNext next = next
-
 getLines :: Next (Behavior String)
-getLines = poll (always (liftIO getLine))
+getLines = poll (always (syncIO getLine))
 
-getCurrentTimes :: Next (Behavior UTCTime)
-getCurrentTimes = poll (always (liftIO getCurrentTime))
+getTime :: Next (Behavior UTCTime)
+getTime = poll (always (syncIO getCurrentTime))
 
-timeSince :: UTCTime -> Next (Behavior NominalDiffTime)
-timeSince startTime = fmap (fmap diffStartTime) getCurrentTimes where
-  diffStartTime = flip diffUTCTime startTime
+whenTrue :: Behavior Bool -> Event ()
+whenTrue behavior = case now behavior of
+  True -> occured ()
+  False -> later (fmap whenTrue (future behavior))
+
 
 main :: IO ()
-main = runEvent (do
+main = runEvent (
+  fmap (whenTrue . fmap isExit) getLines)
 
-  startTime <- liftIO getCurrentTime
-  times <- timeSince startTime
 
-  userInput <- getLines
+isExit :: String -> Bool
+isExit "exit" = True
+isExit _ = False
 
-  let timesWithUserInput = liftA2 (,) times userInput
-  shouldQuit <- poll (fmap userExit timesWithUserInput)
-
-  pure (whenTrue shouldQuit))
-
-userExit :: (NominalDiffTime, String) -> Next Bool
-userExit (_, "exit") =
+nextStep :: UTCTime -> String -> Next Bool
+nextStep _ "exit" =
   pure True
-userExit (time, input) = do
-  liftIO (putStrLn (show time ++ ": " ++ input))
+nextStep time input =
+  syncIO (putStrLn (show time ++ ": " ++ input)) *>
   pure False
 
 {-
@@ -148,16 +141,6 @@ count = loop 0 where
                 e'<- planNow (loop (i+1) <$ e)
                 return (pure i `switch` e')
 -}
-
-whenTrue :: Behavior Bool -> Event ()
-whenTrue behavior = case now behavior of
-  True -> occured ()
-  False -> later (fmap whenTrue (future behavior))
-
-register :: Event a -> ((a -> IO ()) -> IO ())
-register event handler = do
-    plan (fmap handler event)
-    return ()
 
 callback :: IO (a -> IO (), Event a)
 callback = error "not implemented: callback"

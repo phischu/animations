@@ -7,6 +7,7 @@ import Data.IORef
 import Control.Concurrent
 import Control.Monad.IO.Class
 import Data.Time
+import Control.Monad
 
 
 type Behavior = BehaviorT Next
@@ -57,6 +58,10 @@ instance (Applicative m) => Applicative (EventT m) where
     Later mf <*> Occured x = Later (liftA2 (<*>) mf (pure (Occured x)))
     Later mf <*> Later mx = Later (liftA2 (<*>) mf mx)
 
+instance (Applicative m) => Monad (EventT m) where
+    return = pure
+    Occured a >>= mf = mf a
+    Later ma >>= mf = Later (fmap (>>= mf) ma)
 
 data BehaviorT m a = AndThen {
     _now :: a,
@@ -68,6 +73,20 @@ instance (Applicative m) => Applicative (BehaviorT m) where
     (f `AndThen` mf) <*> (x `AndThen` mx) = f x `AndThen` liftA2 (<*>) mf mx
 
 
+-- type Pull = Reader Time
+-- Behavior Pull a
+-- Behavior Push a
+-- pullIO :: IO a -> Pull a
+-- synchronous
+
+-- type Push = Writer Time
+-- instance Monoid Time where
+--   mempty = negative infinity
+--   mappend = max
+-- Event Pull a
+-- Event Push a
+-- pushIO :: IO a -> Push a
+-- asynchrounous
 
 
 switch :: Behavior a -> Event (Behavior a) -> Behavior a
@@ -89,45 +108,42 @@ poll :: Behavior (Next a) -> Next (Behavior a)
 poll behavior =
   liftA2 andThen (now behavior) (fmap poll (future behavior))
 
-runBehavior :: Next (Behavior a) -> IO ()
-runBehavior nextBehavior = do
-  behavior <- runNext nextBehavior
-  runBehavior (future behavior)
+runEvent :: Event a -> IO a
+runEvent event = case event of
+  Occured a -> return a
+  Later nextEvent -> do
+    event' <- runNext nextEvent
+    runEvent event'
 
-runEvent :: Next (Event a) -> IO ()
-runEvent nextEvent = do
-  event <- runNext nextEvent
-  case event of
-    Occured _ -> return ()
-    Later nextEvent' -> runEvent nextEvent'
+nextLineEvent :: Next (Event String)
+nextLineEvent = plan (Occured (syncIO getLine))
 
-getLines :: Next (Behavior String)
-getLines = poll (always (syncIO getLine))
-
-getTime :: Next (Behavior UTCTime)
-getTime = poll (always (syncIO getCurrentTime))
+currentTimeBehavior :: Next (Behavior UTCTime)
+currentTimeBehavior = poll (always (syncIO getCurrentTime))
 
 whenTrue :: Behavior Bool -> Event ()
 whenTrue behavior = case now behavior of
   True -> occured ()
   False -> later (fmap whenTrue (future behavior))
 
+sample :: Behavior a -> Event b -> Event (a, b)
+sample (AndThen a _) (Occured b) =
+  Occured (a, b)
+sample (AndThen _ nextBehavior) (Later nextEvent) =
+  Later (liftA2 sample nextBehavior nextEvent)
 
 main :: IO ()
-main = runEvent (
-  fmap (whenTrue . fmap isExit) getLines)
+main = runEvent loop
 
+nextLineWithTime :: Next (Event (UTCTime, String))
+nextLineWithTime = liftA2 sample currentTimeBehavior nextLineEvent
 
-isExit :: String -> Bool
-isExit "exit" = True
-isExit _ = False
+loop :: Event ()
+loop = do
+  (time, line) <- Later nextLineWithTime
+  Later (plan (Occured (syncIO (putStrLn (show time ++ ": " ++ line)))))
+  unless (line == "exit") loop
 
-nextStep :: UTCTime -> String -> Next Bool
-nextStep _ "exit" =
-  pure True
-nextStep time input =
-  syncIO (putStrLn (show time ++ ": " ++ input)) *>
-  pure False
 
 {-
 test :: Int -> Now (Event ())
@@ -141,6 +157,7 @@ count = loop 0 where
                 e'<- planNow (loop (i+1) <$ e)
                 return (pure i `switch` e')
 -}
+
 
 callback :: IO (a -> IO (), Event a)
 callback = error "not implemented: callback"

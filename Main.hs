@@ -131,11 +131,11 @@ whenTrue behavior = case now behavior of
   True -> occured ()
   False -> later (fmap whenTrue (future behavior))
 
-sample :: Behavior a -> Event b -> Event (a, b)
-sample (AndThen a _) (Occured b) =
+sample :: Event a -> Behavior b -> Event (a, b)
+sample (Occured a) (AndThen b _) =
   Occured (a, b)
-sample (AndThen _ nextBehavior) (Later nextEvent) =
-  Later (liftA2 sample nextBehavior nextEvent)
+sample (Later nextEvent) (AndThen _ nextBehavior) =
+  Later (liftA2 sample nextEvent nextBehavior)
 
 
 loop :: Event String -> Behavior UTCTime -> Event ()

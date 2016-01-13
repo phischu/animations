@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StandaloneDeriving, DeriveFunctor, GeneralizedNewtypeDeriving #-}
 module Main where
 
@@ -115,11 +116,15 @@ runEvent event = case event of
     event' <- runNext nextEvent
     runEvent event'
 
-nextLineEvent :: Next (Event String)
-nextLineEvent = plan (Occured (syncIO getLine))
+nextLine :: Next (Event String)
+nextLine = plan (Occured (syncIO getLine))
 
-currentTimeBehavior :: Next (Behavior UTCTime)
-currentTimeBehavior = poll (always (syncIO getCurrentTime))
+currentTime :: Next (Behavior UTCTime)
+currentTime = poll (always (syncIO getCurrentTime))
+
+nextPutStrLn :: String -> Next (Event ())
+nextPutStrLn message = plan (Occured (syncIO (putStrLn message)))
+
 
 whenTrue :: Behavior Bool -> Event ()
 whenTrue behavior = case now behavior of
@@ -132,17 +137,23 @@ sample (AndThen a _) (Occured b) =
 sample (AndThen _ nextBehavior) (Later nextEvent) =
   Later (liftA2 sample nextBehavior nextEvent)
 
+
+loop :: Event String -> Behavior UTCTime -> Event ()
+loop (Occured "exit") _ = do
+  Occured ()
+loop (Occured message) (AndThen time futureTime) =
+  Later (
+    syncIO (putStrLn (show time ++ ": " ++ message)) *>
+    liftA2 loop nextLine futureTime)
+loop (Later nextEvent) (AndThen _ futureTime) =
+  Later (
+    liftA2 loop nextEvent futureTime)
+
+
 main :: IO ()
-main = runEvent loop
+main = runEvent (Later (
+  liftA2 loop nextLine currentTime))
 
-nextLineWithTime :: Next (Event (UTCTime, String))
-nextLineWithTime = liftA2 sample currentTimeBehavior nextLineEvent
-
-loop :: Event ()
-loop = do
-  (time, line) <- Later nextLineWithTime
-  Later (plan (Occured (syncIO (putStrLn (show time ++ ": " ++ line)))))
-  unless (line == "exit") loop
 
 
 {-

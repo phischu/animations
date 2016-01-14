@@ -9,6 +9,7 @@ import Control.Concurrent
 import Control.Monad.IO.Class
 import Data.Time
 import Control.Monad
+import Data.Monoid
 
 
 data Event next a =
@@ -47,14 +48,30 @@ never :: (Applicative next) => Event next a
 never = Later (pure never)
 
 
-syncIO :: IO a -> IO a
-syncIO = id
+newtype Time = Time Float
+  deriving (Show, Read, Eq, Ord, Num, Fractional)
 
-type Time = Float
+instance Monoid Time where
+  mempty = Time 0
+  mappend (Time t) (Time u) = Time (max t u)
 
-type Push a = (Time, a)
+type Pull = (->) Time
 
-type Pull a = Time -> a
+type Push = (,) Time
+
+
+mouseClicks :: Push (Behavior Push ())
+mouseClicks = undefined
+
+mouseStates :: Pull (Behavior Pull Bool)
+mouseStates = undefined
+
+
+
+
+
+
+
 
 
 switch :: (Applicative next) => Behavior next a -> Event next (Behavior next a) -> Behavior next a
@@ -98,17 +115,17 @@ runEvent (Later nextEvent) =
   nextEvent >>= runEvent
 
 nextLine :: IO (Event IO String)
-nextLine = plan (Occured (syncIO getLine))
+nextLine = plan (Occured getLine)
 
 currentTime :: IO (Behavior IO UTCTime)
-currentTime = poll (always (syncIO getCurrentTime))
+currentTime = poll (always getCurrentTime)
 
 loop :: Event IO String -> Behavior IO UTCTime -> Event IO ()
 loop (Occured "exit") _ = do
   Occured ()
 loop (Occured message) (AndThen time futureTime) =
   Later (
-    syncIO (putStrLn (show time ++ ": " ++ message)) *>
+    putStrLn (show time ++ ": " ++ message) *>
     liftA2 loop nextLine futureTime)
 loop (Later nextEvent) (AndThen _ futureTime) =
   Later (
@@ -119,5 +136,45 @@ main :: IO ()
 main = runEvent (Later (
   liftA2 loop nextLine currentTime))
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+{-
+mainProgram = do
+>     render (Color white $ Scale 0.2 0.2 $ Text "Type some text")
+
+
+>     forM_ [780, 760..] $ \ypos -> do
+>         forM_ [0, 20..980] $ \xpos -> do
+
+
+
+>             event <- iterateUntil keydown $ input
+
+
+
+>             let key = case event of
+>                         EventKey (Char key)            Down _ _ -> key
+>                         EventKey (SpecialKey KeySpace) Down _ _ -> ' '
+
+
+
+>             when (ypos == 780 && xpos == 0) $ cls
+>             render $ Color white $ Translate (xpos-500) (ypos-400) $ Scale 0.2 0.2 $ Text $ [key]
+-}
 
 

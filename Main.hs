@@ -101,30 +101,82 @@ runEvent (Occured a) =
 runEvent (Later nextEvent) =
   nextEvent >>= runEvent
 
-runBehaviorTiming :: (Show a) => Behavior IO a -> IO ()
-runBehaviorTiming (a `AndThen` nextBehavior) = do
-  before <- getCurrentTime
-  print a
-  behavior' <- nextBehavior
-  after <- getCurrentTime
-  print (diffUTCTime after before)
-  runBehavior behavior'
-
-main :: IO ()
-main = runBehavior (fmap now (bad_const count))
-
 runBehavior :: (Show a) => Behavior IO a -> IO ()
 runBehavior (a `AndThen` nextBehavior) = do
   print a
   behavior' <- nextBehavior
   runBehavior behavior'
 
-bad_const :: Behavior IO Int -> Behavior IO (Behavior IO Int)
-bad_const ns = ns `AndThen` pure (bad_const ns)
+runBehaviorTiming :: (Show a) => Behavior IO a -> IO ()
+runBehaviorTiming (a `AndThen` nextBehavior) = do
+  before <- getCurrentTime
+  print a
+  behavior' <- nextBehavior
+  after <- getCurrentTime
+  putStrLn ("TIME: " ++ show (diffUTCTime after before))
+  runBehaviorTiming behavior'
 
-count :: Behavior IO Int
+main :: IO ()
+main = test_example
+
+bad_const_example :: IO ()
+bad_const_example = runBehavior (fmap now (bad_const count))
+
+diagonal_example :: IO ()
+diagonal_example = runBehavior (fmap now (diagonal count))
+
+integral_example :: IO ()
+integral_example = runBehavior (integral 0 count)
+
+test_example :: IO ()
+test_example = do
+  event <- test 1100000
+  runEvent event
+
+bad_const :: Behavior IO Int -> Behavior IO (Behavior IO Int)
+bad_const ns = AndThen ns (pure (bad_const ns))
+
+diagonal :: Behavior IO Int -> Behavior IO (Behavior IO Int)
+diagonal ns = ns `AndThen` fmap diagonal (future ns)
+
+count :: (Num a) => Behavior IO a
 count = loop 0 where
   loop i = i `AndThen` pure (loop (i+1))
+
+integral :: Double -> Behavior IO Double -> Behavior IO Double
+integral i p =
+  i `AndThen` (do
+    dt <- getDTime
+    fmap (integral (i + now p * dt)) (future p))
+
+getDTime :: IO Double
+getDTime = return 1
+
+type Next = IO
+
+test :: Int -> Next (Event Next ())
+test n = do
+  b <- count'
+  pure (whenTrue ((n ==) <$> b))
+
+count' :: Next (Behavior Next Int)
+count' = loop 0 where
+  loop i = do
+    e <- async (return ())
+    e' <- plan (loop (i + 1) <$ e)
+    return (pure i `switch` e')
+
+async :: IO a -> Next (Event Next a)
+async action = do
+  mvar <- newEmptyMVar
+  forkIO (action >>= putMVar mvar)
+  let nextEvent = do
+        maybeValue <- tryReadMVar mvar
+        case maybeValue of
+          Nothing -> pure (Later nextEvent)
+          Just value -> pure (Occured value)
+  nextEvent
+
 
 lonelyChat :: IO ()
 lonelyChat = runEvent (Later (

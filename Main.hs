@@ -60,19 +60,6 @@ type Pull = (->) Time
 type Push = (,) Time
 
 
-mouseClicks :: Push (Behavior Push ())
-mouseClicks = undefined
-
-mouseStates :: Pull (Behavior Pull Bool)
-mouseStates = undefined
-
-
-
-
-
-
-
-
 
 switch :: (Applicative next) => Behavior next a -> Event next (Behavior next a) -> Behavior next a
 switch _ (Occured behavior') =
@@ -114,6 +101,35 @@ runEvent (Occured a) =
 runEvent (Later nextEvent) =
   nextEvent >>= runEvent
 
+runBehaviorTiming :: (Show a) => Behavior IO a -> IO ()
+runBehaviorTiming (a `AndThen` nextBehavior) = do
+  before <- getCurrentTime
+  print a
+  behavior' <- nextBehavior
+  after <- getCurrentTime
+  print (diffUTCTime after before)
+  runBehavior behavior'
+
+main :: IO ()
+main = runBehavior (fmap now (bad_const count))
+
+runBehavior :: (Show a) => Behavior IO a -> IO ()
+runBehavior (a `AndThen` nextBehavior) = do
+  print a
+  behavior' <- nextBehavior
+  runBehavior behavior'
+
+bad_const :: Behavior IO Int -> Behavior IO (Behavior IO Int)
+bad_const ns = ns `AndThen` pure (bad_const ns)
+
+count :: Behavior IO Int
+count = loop 0 where
+  loop i = i `AndThen` pure (loop (i+1))
+
+lonelyChat :: IO ()
+lonelyChat = runEvent (Later (
+  liftA2 loop nextLine currentTime))
+
 nextLine :: IO (Event IO String)
 nextLine = plan (Occured getLine)
 
@@ -130,11 +146,6 @@ loop (Occured message) (AndThen time futureTime) =
 loop (Later nextEvent) (AndThen _ futureTime) =
   Later (
     liftA2 loop nextEvent futureTime)
-
-
-main :: IO ()
-main = runEvent (Later (
-  liftA2 loop nextLine currentTime))
 
 
 

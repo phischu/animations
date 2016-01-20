@@ -37,6 +37,13 @@ data Behavior next a = AndThen {
     now :: a,
     future :: next (Behavior next a)}
 
+instance (Functor next) => Functor (Behavior next) where
+  fmap f (a `AndThen` as) = f a `AndThen` fmap (fmap f) as
+
+instance (Applicative next) => Applicative (Behavior next) where
+    pure a = a `AndThen` pure (pure a)
+    (f `AndThen` mf) <*> (x `AndThen` mx) = f x `AndThen` (liftA2 (<*>) mf mx)
+
 
 always :: (Applicative next) => a -> Behavior next a
 always a = a `AndThen` pure (always a)
@@ -117,19 +124,17 @@ instance Applicative Next where
   pure a = Next (pure (pure a))
   Next f <*> Next a = Next (liftA2 (<*>) f a)
 
-instance Functor List where
-  fmap f (Cons a as) = Cons (f a) (fmap (fmap f) as)
+data Copy a = Copy a
 
-instance (Functor next) => Functor (Behavior next) where
-  fmap f (a `AndThen` as) = f a `AndThen` fmap (fmap f) as
+getCopy :: Copy a -> a
+getCopy (Copy a) = case dup a of Box a' -> a'
 
-instance Applicative List where
-  pure a = Cons a (pure (pure a))
-  (Cons f fs) <*> (Cons a as) = Cons (f a) (liftA2 (<*>) fs as)
+instance Functor Copy where
+  fmap f a = Copy (f (getCopy a))
 
-instance (Applicative next) => Applicative (Behavior next) where
-    pure a = a `AndThen` pure (pure a)
-    (f `AndThen` mf) <*> (x `AndThen` mx) = f x `AndThen` (liftA2 (<*>) mf mx)
+instance Applicative Copy where
+  pure a = Copy a
+  f <*> a = Copy ((getCopy f) (getCopy a))
 
 runNext :: Next a -> IO a
 runNext (Next action) = getCopy action
@@ -137,15 +142,7 @@ runNext (Next action) = getCopy action
 syncIO :: IO a -> Next a
 syncIO action = Next (pure action)
 
-data List a = Cons a (Next (List a))
-
-runList :: (Show a) => List a -> IO a
-runList (Cons a as) = do
-  runNext as >>= runList
-  -- runList (getCopy as)
-  -- runNext as >>= runList
-
-runC :: Behavior Copy a -> IO ()
+runC :: (Show a) => Behavior Copy a -> IO ()
 runC (_ `AndThen` as) = do
   runC (getCopy as)
 
@@ -162,14 +159,6 @@ runBehavior (a `AndThen` nextBehavior) = do
 main :: IO ()
 main = e_example
 
-list_example :: IO ()
-list_example = do
-  putStrLn "starting"
-  let z = repeat' 0
-      l = liftA2 (,) (fmap head' (repeat' z)) z
-  runList l
-  putStrLn "ending"
-
 bad_const_example :: IO ()
 bad_const_example = do
   putStrLn "Starting"
@@ -183,38 +172,12 @@ e_example = do
   putStrLn "Starting"
   let z = bad_const 0
       e = integral 1 z
-  runBehavior e
+  runC e
   putStrLn "Ending"
-
-repeat' :: a -> List a
-repeat' a = Cons a (pure (repeat' a))
 
 bad_const :: (Applicative next) => a -> Behavior next a
 bad_const a = AndThen a (pure (bad_const a))
 
-
-data Copy a = Copy a
-
-getCopy :: Copy a -> a
-getCopy (Copy a) = case dup a of Box a' -> a'
-
-instance Functor Copy where
-  fmap f a = Copy (f (getCopy a))
-
-instance Applicative Copy where
-  pure a = Copy a
-  f <*> a = Copy ((getCopy f) (getCopy a))
-
-
-
-zip' :: List a -> List b -> List (a, b)
-zip' (Cons a as) (Cons b bs) = Cons (a, b) (liftA2 zip' as bs)
-
-map' :: (a -> b) -> List a -> List b
-map' f (Cons a as) = Cons (f a) (fmap (map' f) as)
-
-head' :: List a -> a
-head' (Cons a _) = a
 
 count_example :: IO ()
 count_example = runBehavior count

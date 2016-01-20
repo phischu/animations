@@ -1,4 +1,5 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, ScopedTypeVariables #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE StandaloneDeriving, DeriveFunctor, GeneralizedNewtypeDeriving #-}
 module Main where
 
@@ -7,10 +8,13 @@ import Control.Applicative
 import Data.IORef
 import Control.Concurrent
 import Control.Monad.IO.Class
+import Data.Functor.Identity
 import Data.Time
 import Control.Monad
 import Data.Monoid
+import GHC.Dup
 
+import Debug.Trace
 
 data Event next a =
     Occured a |
@@ -32,12 +36,6 @@ instance (Applicative next) => Monad (Event next) where
 data Behavior next a = AndThen {
     now :: a,
     future :: next (Behavior next a)}
-      deriving (Functor)
-
-instance (Applicative next) => Applicative (Behavior next) where
-    pure a = a `AndThen` pure (pure a)
-    (f `AndThen` mf) <*> (x `AndThen` mx) = f x `AndThen` liftA2 (<*>) mf mx
-
 
 
 always :: (Applicative next) => a -> Behavior next a
@@ -95,17 +93,11 @@ poll :: (Applicative next) => Behavior next (next a) -> next (Behavior next a)
 poll (nextA `AndThen` nextBehavior) =
   liftA2 AndThen nextA (fmap poll nextBehavior)
 
-runEvent :: Event IO a -> IO a
+runEvent :: Event Next a -> IO a
 runEvent (Occured a) =
   return a
 runEvent (Later nextEvent) =
-  nextEvent >>= runEvent
-
-runBehavior :: (Show a) => Behavior IO a -> IO ()
-runBehavior (a `AndThen` nextBehavior) = do
-  print a
-  behavior' <- nextBehavior
-  runBehavior behavior'
+  runNext nextEvent >>= runEvent
 
 runBehaviorTiming :: (Show a) => Behavior IO a -> IO ()
 runBehaviorTiming (a `AndThen` nextBehavior) = do
@@ -116,11 +108,116 @@ runBehaviorTiming (a `AndThen` nextBehavior) = do
   putStrLn ("TIME: " ++ show (diffUTCTime after before))
   runBehaviorTiming behavior'
 
+newtype Next a = Next (Copy (IO a))
+
+instance Functor Next where
+  fmap f (Next action) = Next (fmap (fmap f) action)
+
+instance Applicative Next where
+  pure a = Next (pure (pure a))
+  Next f <*> Next a = Next (liftA2 (<*>) f a)
+
+instance Functor List where
+  fmap f (Cons a as) = Cons (f a) (fmap (fmap f) as)
+
+instance (Functor next) => Functor (Behavior next) where
+  fmap f (a `AndThen` as) = f a `AndThen` fmap (fmap f) as
+
+instance Applicative List where
+  pure a = Cons a (pure (pure a))
+  (Cons f fs) <*> (Cons a as) = Cons (f a) (liftA2 (<*>) fs as)
+
+instance (Applicative next) => Applicative (Behavior next) where
+    pure a = a `AndThen` pure (pure a)
+    (f `AndThen` mf) <*> (x `AndThen` mx) = f x `AndThen` (liftA2 (<*>) mf mx)
+
+runNext :: Next a -> IO a
+runNext (Next action) = getCopy action
+
+syncIO :: IO a -> Next a
+syncIO action = Next (pure action)
+
+data List a = Cons a (Next (List a))
+
+runList :: (Show a) => List a -> IO a
+runList (Cons a as) = do
+  runNext as >>= runList
+  -- runList (getCopy as)
+  -- runNext as >>= runList
+
+runC :: Behavior Copy a -> IO ()
+runC (_ `AndThen` as) = do
+  runC (getCopy as)
+
+runI :: (Show a) => Behavior Identity a -> IO ()
+runI (a `AndThen` as) = do
+  runI (runIdentity as)
+
+runBehavior :: (Show a) => Behavior Next a -> IO ()
+runBehavior (a `AndThen` nextBehavior) = do
+  -- print a
+  behavior' <- runNext nextBehavior
+  runBehavior behavior'
+
 main :: IO ()
-main = test_example
+main = e_example
+
+list_example :: IO ()
+list_example = do
+  putStrLn "starting"
+  let z = repeat' 0
+      l = liftA2 (,) (fmap head' (repeat' z)) z
+  runList l
+  putStrLn "ending"
 
 bad_const_example :: IO ()
-bad_const_example = runBehavior (fmap now (bad_const count))
+bad_const_example = do
+  putStrLn "Starting"
+  let count = bad_const 0
+      b = liftA2 (,) (fmap now (bad_const count)) count
+  runBehavior b
+  putStrLn "ending"
+
+e_example :: IO ()
+e_example = do
+  putStrLn "Starting"
+  let z = bad_const 0
+      e = integral 1 z
+  runBehavior e
+  putStrLn "Ending"
+
+repeat' :: a -> List a
+repeat' a = Cons a (pure (repeat' a))
+
+bad_const :: (Applicative next) => a -> Behavior next a
+bad_const a = AndThen a (pure (bad_const a))
+
+
+data Copy a = Copy a
+
+getCopy :: Copy a -> a
+getCopy (Copy a) = case dup a of Box a' -> a'
+
+instance Functor Copy where
+  fmap f a = Copy (f (getCopy a))
+
+instance Applicative Copy where
+  pure a = Copy a
+  f <*> a = Copy ((getCopy f) (getCopy a))
+
+
+
+zip' :: List a -> List b -> List (a, b)
+zip' (Cons a as) (Cons b bs) = Cons (a, b) (liftA2 zip' as bs)
+
+map' :: (a -> b) -> List a -> List b
+map' f (Cons a as) = Cons (f a) (fmap (map' f) as)
+
+head' :: List a -> a
+head' (Cons a _) = a
+
+count_example :: IO ()
+count_example = runBehavior count
 
 diagonal_example :: IO ()
 diagonal_example = runBehavior (fmap now (diagonal count))
@@ -128,72 +225,68 @@ diagonal_example = runBehavior (fmap now (diagonal count))
 integral_example :: IO ()
 integral_example = runBehavior (integral 0 count)
 
+always_example :: IO ()
+always_example = runBehavior always5
+
 test_example :: IO ()
 test_example = do
-  event <- test 1100000
+  event <- runNext (test 1100000)
   runEvent event
 
-bad_const :: Behavior IO Int -> Behavior IO (Behavior IO Int)
-bad_const ns = AndThen ns (pure (bad_const ns))
-
-diagonal :: Behavior IO Int -> Behavior IO (Behavior IO Int)
+diagonal :: Behavior Next Int -> Behavior Next (Behavior Next Int)
 diagonal ns = ns `AndThen` fmap diagonal (future ns)
 
-count :: (Num a) => Behavior IO a
+count :: (Num a) => Behavior Next a
 count = loop 0 where
   loop i = i `AndThen` pure (loop (i+1))
 
-integral :: Double -> Behavior IO Double -> Behavior IO Double
-integral i p =
-  i `AndThen` (do
-    dt <- getDTime
-    fmap (integral (i + now p * dt)) (future p))
+integral :: (Functor next) => Double -> Behavior next Double -> Behavior next Double
+integral position (velocity `AndThen` futureVelocities) =
+  position `AndThen` fmap (integral (position + velocity)) futureVelocities
 
-getDTime :: IO Double
-getDTime = return 1
+always5 :: Behavior Next Double
+always5 = 5 `AndThen` (pure always5)
 
-type Next = IO
 
 test :: Int -> Next (Event Next ())
-test n = do
-  b <- count'
-  pure (whenTrue ((n ==) <$> b))
+test n = undefined
+  -- fmap (\b -> pure (whenTrue ((n ==) <$> b))) count'
 
 count' :: Next (Behavior Next Int)
-count' = loop 0 where
+count' = undefined{-loop 0 where
   loop i = do
     e <- async (return ())
     e' <- plan (loop (i + 1) <$ e)
-    return (pure i `switch` e')
+    return (pure i `switch` e')-}
 
 async :: IO a -> Next (Event Next a)
-async action = do
+async action = syncIO (do
   mvar <- newEmptyMVar
   forkIO (action >>= putMVar mvar)
-  let nextEvent = do
-        maybeValue <- tryReadMVar mvar
+  let nextEvent = syncIO (do
+        maybeValue <- tryTakeMVar mvar
         case maybeValue of
           Nothing -> pure (Later nextEvent)
-          Just value -> pure (Occured value)
-  nextEvent
+          Just value -> pure (Occured value))
+  runNext nextEvent)
 
 
 lonelyChat :: IO ()
 lonelyChat = runEvent (Later (
   liftA2 loop nextLine currentTime))
 
-nextLine :: IO (Event IO String)
-nextLine = plan (Occured getLine)
+nextLine :: Next (Event Next String)
+nextLine = plan (Occured (syncIO getLine))
 
-currentTime :: IO (Behavior IO UTCTime)
-currentTime = poll (always getCurrentTime)
+currentTime :: Next (Behavior Next UTCTime)
+currentTime = poll (always (syncIO getCurrentTime))
 
-loop :: Event IO String -> Behavior IO UTCTime -> Event IO ()
+loop :: Event Next String -> Behavior Next UTCTime -> Event Next ()
 loop (Occured "exit") _ = do
   Occured ()
 loop (Occured message) (AndThen time futureTime) =
   Later (
-    putStrLn (show time ++ ": " ++ message) *>
+    syncIO (putStrLn (show time ++ ": " ++ message)) *>
     liftA2 loop nextLine futureTime)
 loop (Later nextEvent) (AndThen _ futureTime) =
   Later (

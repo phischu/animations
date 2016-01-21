@@ -33,20 +33,6 @@ instance (Applicative next) => Monad (Event next) where
     Occured a >>= mf = mf a
     Later ma >>= mf = Later (fmap (>>= mf) ma)
 
-data Behavior next a = AndThen {
-    now :: a,
-    future :: next (Behavior next a)}
-
-instance (Functor next) => Functor (Behavior next) where
-  fmap f (a `AndThen` as) = f a `AndThen` fmap (fmap f) as
-
-instance (Applicative next) => Applicative (Behavior next) where
-    pure a = a `AndThen` pure (pure a)
-    (f `AndThen` mf) <*> (x `AndThen` mx) = f x `AndThen` (liftA2 (<*>) mf mx)
-
-
-always :: (Applicative next) => a -> Behavior next a
-always a = a `AndThen` pure (always a)
 
 
 never :: (Applicative next) => Event next a
@@ -124,17 +110,20 @@ instance Applicative Next where
   pure a = Next (pure (pure a))
   Next f <*> Next a = Next (liftA2 (<*>) f a)
 
-data Copy a = Copy a
+newtype Copy a = Copy a
+
+copy :: a -> Copy a
+copy a = Copy a
 
 getCopy :: Copy a -> a
 getCopy (Copy a) = case dup a of Box a' -> a'
 
 instance Functor Copy where
-  fmap f a = Copy (f (getCopy a))
+  fmap f a = copy (f (getCopy a))
 
 instance Applicative Copy where
-  pure a = Copy a
-  f <*> a = Copy ((getCopy f) (getCopy a))
+  pure a = copy a
+  f <*> a = copy ((getCopy f) (getCopy a))
 
 runNext :: Next a -> IO a
 runNext (Next action) = getCopy action
@@ -150,33 +139,130 @@ runI :: (Show a) => Behavior Identity a -> IO ()
 runI (a `AndThen` as) = do
   runI (runIdentity as)
 
+runF :: (Show a) => Behavior ((->) ()) a -> IO ()
+runF (a `AndThen` as) = do
+  runF (as ())
+
 runBehavior :: (Show a) => Behavior Next a -> IO ()
 runBehavior (a `AndThen` nextBehavior) = do
   -- print a
   behavior' <- runNext nextBehavior
   runBehavior behavior'
 
-main :: IO ()
-main = e_example
 
-bad_const_example :: IO ()
-bad_const_example = do
-  putStrLn "Starting"
-  let count = bad_const 0
-      b = liftA2 (,) (fmap now (bad_const count)) count
-  runBehavior b
-  putStrLn "ending"
+
+data Behavior next a = AndThen {
+    now :: a,
+    future :: next (Behavior next a)}
+
+
+instance (Functor next) => Functor (Behavior next) where
+
+  fmap f (a `AndThen` nextAs) =
+    (f a) `AndThen` (fmap (fmap f) nextAs)
+
+
+instance (Applicative next) => Applicative (Behavior next) where
+
+  pure a =
+    a `AndThen` (pure (pure a))
+
+  (f `AndThen` nextFs) <*> (x `AndThen` nextXs) =
+    (f x) `AndThen` (liftA2 (<*>) nextFs nextXs)
+
+
+countFrom :: (Applicative next) => Int -> Behavior next Int
+countFrom i = i `AndThen` pure (countFrom (i + 1))
+
+always :: (Applicative next) => a -> Behavior next a
+always a = a `AndThen` pure (always a)
+
+runList :: (Show a) => Behavior Identity a -> IO ()
+runList (a `AndThen` identityAs) = do
+  print a
+  runList (runIdentity identityAs)
+
+runCopying :: Behavior Copy (Int, Int) -> IO ()
+runCopying (a `AndThen` copyAs) = do
+  print a
+  runCopying (getCopy copyAs)
+
+list_example :: IO ()
+list_example = do
+
+  let numbers = countFrom 0
+
+  let alwaysNumbers = fmap now (always numbers)
+
+  let pairs = liftA2 (,) numbers alwaysNumbers
+
+  runList pairs
+
+copy_example :: IO ()
+copy_example = do
+
+  let numbers = countFrom 0
+
+  let alwaysNumbers = fmap now (always numbers)
+
+  let pairs = liftA2 (,) numbers alwaysNumbers
+
+  runCopying pairs
+
+
+buffer ::
+  (Functor next) =>
+  Int ->
+  Behavior next Int ->
+  Behavior next Int
+buffer n (x `AndThen` nextXs) =
+  n `AndThen` fmap (buffer x) nextXs
+
+forward ::
+  (Functor next) =>
+  Behavior next Int ->
+  next (Behavior next Int)
+forward (x `AndThen` nextXs) =
+  fmap (buffer x) nextXs
+
+scary_const ::
+  (Functor next) =>
+  Behavior next Int ->
+  Behavior next (Behavior next Int)
+scary_const xs =
+  xs `AndThen` fmap scary_const (forward xs)
+
+scary_const_example :: IO ()
+scary_const_example = do
+
+  let numbers = countFrom 0
+
+  let scary_const_numbers = fmap now (scary_const numbers)
+
+  let pairs = liftA2 (,) numbers scary_const_numbers
+
+  runCopying pairs
+
+
+integral ::
+  (Applicative next) =>
+  Double ->
+  Behavior next Double ->
+  Behavior next Double
+integral x (v `AndThen` nextVs) =
+  x `AndThen` (fmap (integral (x + v)) nextVs)
+
 
 e_example :: IO ()
 e_example = do
-  putStrLn "Starting"
-  let z = bad_const 0
-      e = integral 1 z
-  runC e
-  putStrLn "Ending"
 
-bad_const :: (Applicative next) => a -> Behavior next a
-bad_const a = AndThen a (pure (bad_const a))
+  let e = integral 1 (1 `AndThen` pure e)
+
+  runList e
+
+
+main :: IO ()
+main = scary_const_example
 
 
 count_example :: IO ()
@@ -184,9 +270,6 @@ count_example = runBehavior count
 
 diagonal_example :: IO ()
 diagonal_example = runBehavior (fmap now (diagonal count))
-
-integral_example :: IO ()
-integral_example = runBehavior (integral 0 count)
 
 always_example :: IO ()
 always_example = runBehavior always5
@@ -202,10 +285,6 @@ diagonal ns = ns `AndThen` fmap diagonal (future ns)
 count :: (Num a) => Behavior Next a
 count = loop 0 where
   loop i = i `AndThen` pure (loop (i+1))
-
-integral :: (Functor next) => Double -> Behavior next Double -> Behavior next Double
-integral position (velocity `AndThen` futureVelocities) =
-  position `AndThen` fmap (integral (position + velocity)) futureVelocities
 
 always5 :: Behavior Next Double
 always5 = 5 `AndThen` (pure always5)

@@ -13,9 +13,4 @@ type Pull = (->) Time
 type Push = (,) Time
 
 
-runI :: (Show a) => Behavior Identity a -> IO ()
-runI (a `AndThen` as) = do
-  runI (runIdentity as)
-
-
 

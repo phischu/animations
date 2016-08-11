@@ -6,29 +6,15 @@ import Animations.IO
 
 import Control.Applicative
 import Control.Concurrent
-import Data.Functor.Identity
-import Data.Time
 
+
+runI :: (Show a) => Behavior Identity a -> IO ()
+runI (a `AndThen` as) = do
+  runI (runIdentity as)
 
 runC :: (Show a) => Behavior Copy a -> IO ()
 runC (_ `AndThen` as) = do
   runC (getCopy as)
-
-runList :: (Show a) => Behavior Identity a -> IO ()
-runList (a `AndThen` identityAs) = do
-  print a
-  runList (runIdentity identityAs)
-
-runCopying :: (Show a) => Behavior Copy a -> IO ()
-runCopying (a `AndThen` copyAs) = do
-  print a
-  runCopying (getCopy copyAs)
-
-runEvent :: Event Next a -> IO a
-runEvent (Occured a) =
-  return a
-runEvent (Later nextEvent) =
-  runNext nextEvent >>= runEvent
 
 runBehaviorTiming :: (Show a) => Behavior IO a -> IO ()
 runBehaviorTiming (a `AndThen` nextBehavior) = do
@@ -45,31 +31,6 @@ runBehavior (_ `AndThen` nextBehavior) = do
   behavior' <- runNext nextBehavior
   runBehavior behavior'
 
-list_example :: IO ()
-list_example = do
-
-  let numbers = countFrom 0
-
-  let alwaysNumbers = fmap now (always numbers)
-
-  let pairs = liftA2 (,) numbers alwaysNumbers
-
-  runList pairs
-
-copy_example :: IO ()
-copy_example = do
-
-  let numbers = countFrom 0
-
-  let alwaysNumbers = fmap now (always numbers)
-
-  let pairs = liftA2 (,) numbers alwaysNumbers
-
-  runCopying pairs
-
-
-main :: IO ()
-main = list_example
 
 
 buffer ::
@@ -170,27 +131,6 @@ async action = syncIO (do
           Just value -> pure (Occured value))
   runNext nextEvent)
 
-
-lonelyChat :: IO ()
-lonelyChat = runEvent (Later (
-  liftA2 loop nextLine currentTime))
-
-nextLine :: Next (Event Next String)
-nextLine = plan (Occured (syncIO getLine))
-
-currentTime :: Next (Behavior Next UTCTime)
-currentTime = poll (always (syncIO getCurrentTime))
-
-loop :: Event Next String -> Behavior Next UTCTime -> Event Next ()
-loop (Occured "exit") _ = do
-  Occured ()
-loop (Occured message) (AndThen time futureTime) =
-  Later (
-    syncIO (putStrLn (show time ++ ": " ++ message)) *>
-    liftA2 loop nextLine futureTime)
-loop (Later nextEvent) (AndThen _ futureTime) =
-  Later (
-    liftA2 loop nextEvent futureTime)
 
 
 

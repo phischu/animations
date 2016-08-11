@@ -1,4 +1,8 @@
+{-# language GeneralizedNewtypeDeriving #-}
 module Animations.Pure where
+
+
+import Data.Monoid
 
 
 newtype Time = Time Float

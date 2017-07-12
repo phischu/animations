@@ -27,11 +27,10 @@ library
                        Animations.Copy
   -- other-extensions:    
   build-depends:       base,
-                       transformers,
-                       ghc-dup
+                       transformers
   hs-source-dirs:      src
   default-language:    Haskell2010
-  ghc-options:         -rtsopts -Wall
+  ghc-options:         -Wall
 
 
 executable chat-example
@@ -40,8 +39,7 @@ executable chat-example
   -- other-extensions:
   build-depends:       base,
                        animations,
-                       time,
-                       ghc-dup
+                       time
   hs-source-dirs:      src
   default-language:    Haskell2010
   ghc-options:         -rtsopts -Wall
@@ -62,10 +60,11 @@ executable copy-example
   main-is:             CopyExample.hs
   -- other-modules:       
   -- other-extensions:    
-  build-depends:       base,
-                       ghc-dup
+  build-depends:       base
   hs-source-dirs:      src
   default-language:    Haskell2010
   ghc-options:         -rtsopts -Wall
+
+
 
 

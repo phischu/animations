@@ -27,7 +27,8 @@ library
                        Animations.Copy
   -- other-extensions:    
   build-depends:       base,
-                       transformers
+                       transformers,
+                       these
   hs-source-dirs:      src
   default-language:    Haskell2010
   ghc-options:         -Wall
@@ -71,7 +72,9 @@ executable ball-example
   -- other-modules:       
   -- other-extensions:    
   build-depends:       base,
-                       animations
+                       animations,
+                       linear,
+                       these
   hs-source-dirs:      src
   default-language:    Haskell2010
   ghc-options:         -rtsopts -Wall

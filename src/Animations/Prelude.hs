@@ -50,7 +50,8 @@ countFrom i = i `AndThen` pure (countFrom (i + 1))
 always :: (Applicative next) => a -> Behavior next a
 always a = a `AndThen` pure (always a)
 
-
+unfold :: (Functor next) => (a -> next a) -> a -> Behavior next a
+unfold f a = a `AndThen` (fmap (unfold f) (f a))
 
 
 
